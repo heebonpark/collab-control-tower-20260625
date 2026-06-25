@@ -20,8 +20,7 @@ if not exist "node_modules" (
     )
 )
 
-echo 개발 서버를 시작합니다... 브라우저가 자동으로 열립니다.
-start "" cmd /c "timeout /t 3 >nul && start http://localhost:5173"
+echo 개발 서버를 시작합니다... 준비되면 브라우저가 자동으로 열립니다.
 call npm run dev
 
 pause
