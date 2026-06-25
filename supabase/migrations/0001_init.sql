@@ -144,3 +144,14 @@ on conflict do nothing;
 
 -- Storage 버킷은 SQL로 만들 수 없으므로 대시보드에서 직접 생성하세요:
 -- Storage → New bucket → 이름 "task-attachments" → Public bucket 체크 해제(비공개) → Create
+
+-- task-attachments 버킷 접근 정책 (anon key로 업로드/다운로드 가능하도록)
+insert into storage.buckets (id, name, public)
+values ('task-attachments', 'task-attachments', false)
+on conflict (id) do nothing;
+
+create policy "allow all - task-attachments objects" on storage.objects
+for all using (bucket_id = 'task-attachments') with check (bucket_id = 'task-attachments');
+
+create policy "allow read - task-attachments bucket" on storage.buckets
+for select using (id = 'task-attachments');
