@@ -1,7 +1,16 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import ExcelUploader from "./components/ui/ExcelUploader"; // NEW: Excel uploader component
 import { loadAssignments, saveAssignments } from "./utils/persistence"; // NEW: persistence utilities
+import { supabase } from "./lib/supabaseClient";
 import {
+  fetchAccounts, fetchAdmins, fetchTasks, fetchNotifications, fetchSentLinks,
+  createAccount, updateAccount, deleteAccount,
+  createTask, updateTaskStatus, addTaskLog, requestUpdate,
+  fetchAttachments, uploadAttachment, getAttachmentSignedUrl,
+  createSentLink, resolveLinkToken, isNotificationForViewer,
+} from "./lib/api";
+import {
+  Paperclip, Download,
   Bell, Search, Plus, X, ChevronRight, Building2, Store,
   Clock, AlertTriangle, CheckCircle2, Circle, PauseCircle, Filter,
   Calendar, MessageSquare, Send, LogOut, ShieldCheck, ArrowLeft,
@@ -134,73 +143,6 @@ function daysUntil(dateStr) {
   const d = new Date(dateStr); const now = new Date();
   d.setHours(0, 0, 0, 0); now.setHours(0, 0, 0, 0);
   return Math.round((d - now) / 86400000);
-}
-
-/* ---------------------------------------------------------
-   계정 시드
---------------------------------------------------------- */
-function seedAccounts() {
-  const mk = (group, unitId, role, name, email, phone) => ({
-    id: uid("A"), group, unitId, role, name, email, phone, password: "1234", createdAt: "2026-01-10",
-  });
-  return [
-    mk("hq", "hq-gbgw", "본부담당", "한소율", "hsy@gbgw.co.kr", "010-1111-2222"),
-    mk("hq", "hq-gbgw", "본부담당", "임도현", "idh@gbgw.co.kr", "010-1111-3333"),
-    mk("branch", "br-jungang", "지사장", "이서연", "lsy@gbgw.co.kr", "010-2222-1111"),
-    mk("branch", "br-jungang", "지사담당", "김민재", "kmj@gbgw.co.kr", "010-2222-2222"),
-    mk("branch", "br-gangbuk", "지사담당", "김도윤", "kdy@gbgw.co.kr", "010-3333-1111"),
-    mk("branch", "br-gangbuk", "영업팀장", "오하늘", "ohn@gbgw.co.kr", "010-3333-2222"),
-    mk("branch", "br-seodaemun", "영업팀장", "송하윤", "shy@gbgw.co.kr", "010-4444-1111"),
-    mk("branch", "br-goyang", "지사담당", "조은우", "jeu@gbgw.co.kr", "010-5555-1111"),
-    mk("branch", "br-uijeongbu", "고객팀장", "윤서아", "ysa@gbgw.co.kr", "010-6666-1111"),
-    mk("branch", "br-namyangju", "고객팀장", "강유진", "kyj@gbgw.co.kr", "010-7777-1111"),
-    mk("branch", "br-gangneung", "지사장", "정하은", "jhe@gbgw.co.kr", "010-8888-1111"),
-    mk("branch", "br-wonju", "영업팀장", "박지훈", "pjh@gbgw.co.kr", "010-9999-1111"),
-  ];
-}
-function seedAdmins() {
-  return [{ id: uid("M"), name: "최관리", email: "admin@gbgw.co.kr", phone: "010-0000-0000", password: "admin123" }];
-}
-
-/* ---------------------------------------------------------
-   업무 시드
---------------------------------------------------------- */
-function seedTasks() {
-  const today = new Date();
-  const fmt = (offset) => { const d = new Date(today); d.setDate(d.getDate() + offset); return d.toISOString().slice(0, 10); };
-  const mk = (categoryId, itemId, unitId, role, owner, status, due, priority, note, offsetCreated) => {
-    const { item } = findItem(categoryId, itemId);
-    return {
-      id: uid(), categoryId, itemId, title: item.name, cycle: item.cycle, unitId, role, owner, status, due, priority, desc: note,
-      requested: false, createdAt: fmt(offsetCreated || -5),
-      logs: [{ at: fmt(offsetCreated || -5), text: "업무 등록됨", by: { name: owner, group: unitInfo(unitId).group } }],
-    };
-  };
-  return [
-    mk("install", "install-sims", "br-gangbuk", "지사담당", "김도윤", "progress", fmt(0), "high", "당일 배정 SIMS 입력 진행 중", -1),
-    mk("install", "install-settle", "br-jungang", "지사담당", "김민재", "delayed", fmt(-2), "high", "8월분 공사비 정산 미완료", -10),
-    mk("install", "install-verify", "br-wonju", "영업팀장", "박지훈", "pending", fmt(3), "mid", "이번 달 3회차 영상 검증 예정", -3),
-    mk("install", "install-safety", "br-gangneung", "지사장", "정하은", "progress", fmt(0), "high", "현장 안전검검 일일보고 진행", 0),
-    mk("install", "install-support", "br-seodaemun", "영업팀장", "송하윤", "pending", fmt(2), "low", "공사팀 섭외 요청 1건 접수", -1),
-    mk("rate", "rate-share", "br-uijeongbu", "고객팀장", "윤서아", "done", fmt(-1), "mid", "일일 실적 공유 완료", -1),
-    mk("rate", "rate-collect", "br-namyangju", "고객팀장", "강유진", "delayed", fmt(-1), "high", "미징수 12건 독려 필요", -2),
-    mk("vehicle", "vehicle-month", "br-goyang", "지사담당", "조은우", "pending", fmt(4), "mid", "10월 과태료 정산 대기", -2),
-    mk("vehicle", "vehicle-clean", "br-gangbuk", "영업팀장", "오하늘", "done", fmt(-3), "low", "이륜차 청결유지비 지급 완료", -4),
-    mk("vehicle", "vehicle-accident", "br-jungang", "지사장", "이서연", "progress", fmt(1), "high", "출동서비스팀 회신 대기 중", -1),
-    mk("goods", "goods-request", "br-wonju", "영업팀장", "박지훈", "progress", fmt(2), "low", "운영혁신팀 물품 신청 처리 중", -1),
-    mk("goods", "goods-material", "br-gangneung", "지사장", "정하은", "pending", fmt(10), "low", "4분기 직영공사자재 신청 예정", -1),
-    mk("install", "install-arpu", "hq-gbgw", "본부담당", "한소율", "progress", fmt(2), "mid", "고ARPU 설변시설 검도 승인 검토 중", -2),
-    mk("install", "install-info", "hq-gbgw", "본부담당", "임도현", "done", fmt(-2), "low", "설치공사팀 정보 갱신 완료", -3),
-  ];
-}
-function seedNotifications() {
-  return [
-    { id: uid("N"), kind: "delayed", text: "중앙지사 설치공사비 정산 — 지연 2일", at: "방금" },
-    { id: uid("N"), kind: "delayed", text: "남양주지사 미징수 확인 및 독려 — 지연 1일", at: "10분 전" },
-    { id: uid("N"), kind: "due", text: "강북지사 SIMS 배정업무 — 오늘 처리 필요", at: "1시간 전" },
-    { id: uid("N"), kind: "assign", text: "서대문지사 공사팀 섭외 지원이 송하윤 영업팀장에게 등록됨", at: "3시간 전" },
-    { id: uid("N"), kind: "done", text: "강북지사 이륜차 청결유지비 지급 완료 처리됨", at: "어제" },
-  ];
 }
 
 /* ---------------------------------------------------------
@@ -456,9 +398,38 @@ function TaskModal({ currentUser, onClose, onCreate }) {
 /* ---------------------------------------------------------
    업무 상세 패널
 --------------------------------------------------------- */
-function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, onAddLog, onRequestUpdate }) {
+function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment }) {
   const [comment, setComment] = useState("");
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!task) return;
+    let active = true;
+    fetchAttachments(task.id).then((rows) => { if (active) setAttachments(rows); }).catch(() => {});
+    return () => { active = false; };
+  }, [task && task.id]);
+
   if (!task) return null;
+
+  const pickFile = () => fileInputRef.current && fileInputRef.current.click();
+  const handleFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    try {
+      const att = await onUploadAttachment(task.id, file);
+      setAttachments((prev) => [att, ...prev]);
+    } finally {
+      setUploading(false);
+    }
+  };
+  const download = async (att) => {
+    const url = await getAttachmentSignedUrl(att.filePath);
+    window.open(url, "_blank");
+  };
   const dleft = daysUntil(task.due);
   const isReviewer = currentUser.type === "admin" || currentUser.group === "hq";
   const viewerGroupTag = currentUser.type === "admin" ? "admin" : currentUser.group;
@@ -517,6 +488,27 @@ function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, o
           }}><Megaphone size={14} /> 진행상황 요청 보내기</button>
         )}
 
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ fontSize: 12.5, fontWeight: 700, color: T.sub, marginBottom: 8, display: "block" }}>
+            <Paperclip size={12} style={{ verticalAlign: -1, marginRight: 4 }} />첨부파일
+          </label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+            {attachments.length === 0 ? (
+              <div style={{ fontSize: 12, color: T.faint }}>첨부된 파일이 없습니다.</div>
+            ) : attachments.map((att) => (
+              <div key={att.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12.5, background: T.canvas, borderRadius: 8, padding: "7px 10px" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.fileName}</span>
+                <button className="cct-btn" onClick={() => download(att)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.hq, display: "flex", flexShrink: 0 }}><Download size={14} /></button>
+              </div>
+            ))}
+          </div>
+          <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFile} />
+          <button className="cct-btn" onClick={pickFile} disabled={uploading} style={{
+            display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.sub,
+            border: `1px dashed ${T.border}`, background: "#fff", borderRadius: 9, padding: "7px 12px", cursor: uploading ? "not-allowed" : "pointer",
+          }}><Paperclip size={13} />{uploading ? "업로드 중..." : "파일 첨부하기"}</button>
+        </div>
+
         <label style={{ fontSize: 12.5, fontWeight: 700, color: T.sub, marginBottom: 8, display: "block" }}>
           <MessageSquare size={12} style={{ verticalAlign: -1, marginRight: 4 }} />공유 / 피드백 로그
         </label>
@@ -555,7 +547,7 @@ function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, o
 /* ---------------------------------------------------------
    대시보드 (담당자/본부/관리자 공용)
 --------------------------------------------------------- */
-function Dashboard({ viewer, tasks, notifications, onCreate, onUpdateStatus, onAddLog, onRequestUpdate, canRegister, canRequest }) {
+function Dashboard({ viewer, tasks, notifications, onCreate, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, canRegister, canRequest }) {
   const [regionAssignments, setRegionAssignments] = useState(() => loadAssignments() || {}); // NEW: region assignments state
   const [query, setQuery] = useState("");
   const [scopeFilter, setScopeFilter] = useState("all");
@@ -734,7 +726,8 @@ function Dashboard({ viewer, tasks, notifications, onCreate, onUpdateStatus, onA
       {showModal && <TaskModal currentUser={viewer} onClose={() => setShowModal(false)} onCreate={(f) => { onCreate(f); setShowModal(false); }} />}
       {selectedTask && (
         <DetailPanel task={tasks.find((t) => t.id === selectedTask.id) || selectedTask} currentUser={viewer.raw} canRequest={canRequest}
-          onClose={() => setSelectedTask(null)} onUpdateStatus={onUpdateStatus} onAddLog={onAddLog} onRequestUpdate={onRequestUpdate} />
+          onClose={() => setSelectedTask(null)} onUpdateStatus={onUpdateStatus} onAddLog={onAddLog} onRequestUpdate={onRequestUpdate}
+          onUploadAttachment={onUploadAttachment} />
       )}
     </div>
   );
@@ -830,17 +823,28 @@ function AccountsManager({ accounts, setAccounts, pushToast }) {
   const units = groupFilter === "all" ? ALL_UNITS : ALL_UNITS.filter((u) => u.group === groupFilter);
   const rows = accounts.filter((a) => (groupFilter === "all" || a.group === groupFilter) && (unitFilter === "all" || a.unitId === unitFilter));
 
-  const save = (data) => {
-    if (data.id) {
-      setAccounts((acc) => acc.map((a) => a.id === data.id ? { ...a, ...data } : a));
-      pushToast("계정이 수정되었습니다");
-    } else {
-      setAccounts((acc) => [{ ...data, id: uid("A"), createdAt: new Date().toISOString().slice(0, 10) }, ...acc]);
-      pushToast("계정이 등록되었습니다");
-    }
+  const save = async (data) => {
+    try {
+      if (data.id) {
+        const updated = await updateAccount(data.id, data);
+        setAccounts((acc) => acc.map((a) => a.id === updated.id ? updated : a));
+        pushToast("계정이 수정되었습니다");
+      } else {
+        const created = await createAccount(data);
+        setAccounts((acc) => [created, ...acc]);
+        pushToast("계정이 등록되었습니다");
+      }
+    } catch (e) { console.error(e); pushToast("저장에 실패했습니다"); }
     setEditing(null);
   };
-  const remove = (id) => { setAccounts((acc) => acc.filter((a) => a.id !== id)); setConfirmDel(null); pushToast("계정이 삭제되었습니다"); };
+  const remove = async (id) => {
+    try {
+      await deleteAccount(id);
+      setAccounts((acc) => acc.filter((a) => a.id !== id));
+      pushToast("계정이 삭제되었습니다");
+    } catch (e) { console.error(e); pushToast("삭제에 실패했습니다"); }
+    setConfirmDel(null);
+  };
 
   const cellStyle = { padding: "10px 12px", fontSize: 13, borderTop: `1px solid ${T.border}` };
 
@@ -911,16 +915,17 @@ function LinkSender({ accounts, sentLinks, setSentLinks, pushToast }) {
   const toggle = (id) => setSelected((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const toggleAll = () => setSelected(allChecked ? new Set() : new Set(rows.map((r) => r.id)));
 
-  const sendTo = (ids) => {
+  const sendTo = async (ids) => {
     const targets = accounts.filter((a) => ids.includes(a.id));
     if (targets.length === 0) return;
-    const entries = targets.map((a) => ({
-      id: uid("L"), accountId: a.id, name: a.name, unit: unitInfo(a.unitId).name, role: a.role, method,
-      link: `https://collab.gbgw.kr/access?token=${uid("TK").toLowerCase()}`, at: "방금",
-    }));
-    setSentLinks((s) => [...entries, ...s]);
-    pushToast(`${targets.length}명에게 ${method === "email" ? "이메일" : "문자"}로 발송했습니다`);
-    setSelected(new Set());
+    try {
+      const entries = await Promise.all(targets.map((a) =>
+        createSentLink({ accountId: a.id, name: a.name, unit: unitInfo(a.unitId).name, role: a.role, method })
+      ));
+      setSentLinks((s) => [...entries, ...s]);
+      pushToast(`${targets.length}명에게 ${method === "email" ? "이메일" : "문자"}로 발송했습니다`);
+      setSelected(new Set());
+    } catch (e) { console.error(e); pushToast("발송에 실패했습니다"); }
   };
 
   return (
@@ -988,15 +993,17 @@ function LinkSender({ accounts, sentLinks, setSentLinks, pushToast }) {
    메인 App
 --------------------------------------------------------- */
 export default function CollabControlTower() {
-  const [accounts, setAccounts] = useState(seedAccounts);
-  const [admins] = useState(seedAdmins);
+  const [accounts, setAccounts] = useState([]);
+  const [admins, setAdmins] = useState([]);
   const [sentLinks, setSentLinks] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
-  const [tasks, setTasks] = useState(seedTasks);
-  const [notifications, setNotifications] = useState(seedNotifications);
+  const [tasks, setTasks] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [adminTab, setAdminTab] = useState("monitor");
   const [toasts, setToasts] = useState([]);
+  const [tokenChecked, setTokenChecked] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const notifRef = useRef(null);
 
   useEffect(() => {
@@ -1011,43 +1018,127 @@ export default function CollabControlTower() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600);
   }, []);
 
-  const handleCreate = (form) => {
+  // 링크발송으로 받은 매직링크(?token=...)로 들어온 경우 로그인 화면을 건너뛰고 자동 로그인
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("token");
+    if (!token) { setTokenChecked(true); return; }
+    resolveLinkToken(token).then((result) => {
+      if (result && result.account) {
+        const acc = result.account;
+        setCurrentUser({ type: "staff", group: acc.group, unitId: acc.unitId, unitName: unitInfo(acc.unitId).name, role: acc.role, name: acc.name, accountId: acc.id });
+      }
+    }).catch((e) => console.error(e)).finally(() => setTokenChecked(true));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [acc, adm, tk, nf, sl] = await Promise.all([
+          fetchAccounts(), fetchAdmins(), fetchTasks(), fetchNotifications(), fetchSentLinks(),
+        ]);
+        if (cancelled) return;
+        setAccounts(acc); setAdmins(adm); setTasks(tk); setNotifications(nf); setSentLinks(sl);
+      } catch (e) {
+        console.error(e);
+        pushToast("데이터를 불러오지 못했습니다. Supabase 설정을 확인하세요.");
+      } finally {
+        if (!cancelled) setDataLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pushToast]);
+
+  // 다른 사용자의 변경사항을 실시간으로 반영
+  // tasks 업무 등록/로그 추가는 같은 동작 안에서 tasks와 task_logs에 연달아 쓰기 때문에
+  // INSERT/UPDATE 이벤트가 짧은 시간에 여러 번 들어온다. 매번 즉시 재조회하면 아직 커밋되지
+  // 않은 중간 상태를 읽어와서 방금 반영된 최신 상태를 덮어쓸 수 있어, 한 박자 쉬었다가
+  // (디바운스) 가장 마지막 호출의 결과만 반영한다.
+  const taskFetchSeq = useRef(0);
+  const refreshTimer = useRef(null);
+  const refreshTasks = useCallback(() => {
+    clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      const seq = ++taskFetchSeq.current;
+      fetchTasks().then((tk) => { if (seq === taskFetchSeq.current) setTasks(tk); }).catch(() => {});
+    }, 500);
+  }, []);
+
+  useEffect(() => {
+    const channel = supabase.channel("cct-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, refreshTasks)
+      .on("postgres_changes", { event: "*", schema: "public", table: "task_logs" }, refreshTasks)
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => fetchNotifications().then(setNotifications).catch(() => {}))
+      .on("postgres_changes", { event: "*", schema: "public", table: "accounts" }, () => fetchAccounts().then(setAccounts).catch(() => {}))
+      .on("postgres_changes", { event: "*", schema: "public", table: "sent_links" }, () => fetchSentLinks().then(setSentLinks).catch(() => {}))
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  const actorFrom = useCallback(
+    () => currentUser.type === "admin" ? { name: currentUser.name, group: "admin" } : { name: currentUser.name, group: currentUser.group },
+    [currentUser]
+  );
+
+  const handleCreate = async (form) => {
     const { item } = findItem(form.categoryId, form.itemId);
-    const newTask = {
-      id: uid(), categoryId: form.categoryId, itemId: form.itemId, title: item.name, cycle: item.cycle,
-      unitId: currentUser.unitId, role: currentUser.role, owner: currentUser.name,
-      status: "pending", priority: form.priority, due: form.due, desc: form.desc, requested: false,
-      createdAt: new Date().toISOString().slice(0, 10),
-      logs: [{ at: "방금", text: "업무 등록됨", by: { name: currentUser.name, group: currentUser.group } }],
-    };
-    setTasks((t) => [newTask, ...t]);
-    setNotifications((n) => [{ id: uid("N"), kind: "assign", text: `${unitInfo(currentUser.unitId).name} ${currentUser.role} ${currentUser.name} — ${item.name} 등록`, at: "방금" }, ...n]);
-    pushToast("업무가 등록되었습니다");
+    try {
+      const newTask = await createTask({
+        categoryId: form.categoryId, itemId: form.itemId, title: item.name, cycle: item.cycle,
+        unitId: currentUser.unitId, role: currentUser.role, owner: currentUser.name,
+        priority: form.priority, due: form.due, desc: form.desc,
+      }, actorFrom());
+      setTasks((ts) => [newTask, ...ts]);
+      pushToast("업무가 등록되었습니다");
+    } catch (e) { console.error(e); pushToast("업무 등록에 실패했습니다"); }
   };
 
-  const handleUpdateStatus = (id, status) => {
-    const by = currentUser.type === "admin" ? { name: currentUser.name, group: "admin" } : { name: currentUser.name, group: currentUser.group };
-    setTasks((ts) => ts.map((t) => t.id === id ? { ...t, status, requested: t.unitId && by.group !== "admin" && by.group !== "hq" ? false : t.requested, logs: [...t.logs, { at: "방금", text: `상태 변경 → ${STATUS[status].label}`, by }] } : t));
-    if (status === "done") pushToast("업무가 완료 처리되었습니다");
+  const handleUpdateStatus = async (id, status) => {
+    try {
+      const { task, log } = await updateTaskStatus(id, status, actorFrom());
+      setTasks((ts) => ts.map((t) => t.id === id ? { ...t, status: task.status, requested: task.requested, logs: [...t.logs, log] } : t));
+      if (status === "done") pushToast("업무가 완료 처리되었습니다");
+    } catch (e) { console.error(e); pushToast("상태 변경에 실패했습니다"); }
   };
 
-  const handleAddLog = (id, text) => {
-    const by = currentUser.type === "admin" ? { name: currentUser.name, group: "admin" } : { name: currentUser.name, group: currentUser.group };
-    const clearsRequest = by.group !== "admin" && by.group !== "hq";
-    setTasks((ts) => ts.map((t) => t.id === id ? { ...t, requested: clearsRequest ? false : t.requested, logs: [...t.logs, { at: "방금", text, by }] } : t));
-    pushToast(by.group === "admin" || by.group === "hq" ? "피드백이 전달되었습니다" : "진행 내용이 공유되었습니다");
+  const handleAddLog = async (id, text) => {
+    const actor = actorFrom();
+    try {
+      const log = await addTaskLog(id, text, actor);
+      const clearsRequest = actor.group !== "admin" && actor.group !== "hq";
+      setTasks((ts) => ts.map((t) => t.id === id ? { ...t, requested: clearsRequest ? false : t.requested, logs: [...t.logs, log] } : t));
+      pushToast(actor.group === "admin" || actor.group === "hq" ? "피드백이 전달되었습니다" : "진행 내용이 공유되었습니다");
+    } catch (e) { console.error(e); pushToast("등록에 실패했습니다"); }
   };
 
-  const handleRequestUpdate = (id) => {
-    const by = currentUser.type === "admin" ? { name: currentUser.name, group: "admin" } : { name: currentUser.name, group: currentUser.group };
-    setTasks((ts) => ts.map((t) => t.id === id ? { ...t, requested: true, logs: [...t.logs, { at: "방금", text: "담당자에게 진행상황 업데이트를 요청했습니다", by, kind: "request" }] } : t));
-    const task = tasks.find((t) => t.id === id);
-    if (task) setNotifications((n) => [{ id: uid("N"), kind: "request", text: `${unitInfo(task.unitId).name} ${task.owner}님에게 "${task.title}" 진행상황 요청`, at: "방금" }, ...n]);
-    pushToast("진행상황 요청을 보냈습니다");
+  const handleRequestUpdate = async (id) => {
+    try {
+      const { task, log } = await requestUpdate(id, actorFrom());
+      setTasks((ts) => ts.map((t) => t.id === id ? { ...t, requested: task.requested, logs: [...t.logs, log] } : t));
+      pushToast("진행상황 요청을 보냈습니다");
+    } catch (e) { console.error(e); pushToast("요청 전송에 실패했습니다"); }
   };
 
-  const NOTIF_ICON = { delayed: AlertTriangle, due: Clock, assign: Send, done: CheckCircle2, request: Megaphone };
-  const NOTIF_COLOR = { delayed: T.delayed, due: T.hold, assign: T.hq, done: T.done, request: T.request };
+  const handleUploadAttachment = async (taskId, file) => {
+    try {
+      const { attachment, log } = await uploadAttachment(taskId, file, actorFrom());
+      setTasks((ts) => ts.map((t) => t.id === taskId ? { ...t, logs: [...t.logs, log] } : t));
+      pushToast("파일이 첨부되었습니다");
+      return attachment;
+    } catch (e) { console.error(e); pushToast("파일 업로드에 실패했습니다"); throw e; }
+  };
+
+  const NOTIF_ICON = { delayed: AlertTriangle, due: Clock, assign: Send, done: CheckCircle2, request: Megaphone, status: CheckCircle2, update: MessageSquare };
+  const NOTIF_COLOR = { delayed: T.delayed, due: T.hold, assign: T.hq, done: T.done, request: T.request, status: T.progress, update: T.branch };
+
+  if (!tokenChecked || !dataLoaded) {
+    return (
+      <div className="cct-root" style={{ borderRadius: 14, overflow: "hidden", border: `1px solid ${T.border}`, minHeight: 320, display: "flex", alignItems: "center", justifyContent: "center", color: T.faint, fontSize: 13.5 }}>
+        <style>{FONT}</style>
+        불러오는 중...
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return (
@@ -1057,6 +1148,8 @@ export default function CollabControlTower() {
       </div>
     );
   }
+
+  const visibleNotifications = notifications.filter((n) => isNotificationForViewer(n, currentUser));
 
   const isAdmin = currentUser.type === "admin";
   const isHqStaff = !isAdmin && currentUser.group === "hq";
@@ -1099,13 +1192,14 @@ export default function CollabControlTower() {
         <div ref={notifRef} style={{ position: "relative" }}>
           <button className="cct-btn" onClick={() => setNotifOpen((o) => !o)} style={{ border: "none", background: "transparent", color: "#fff", cursor: "pointer", position: "relative", display: "flex", padding: 6 }}>
             <Bell size={19} />
-            {notifications.length > 0 && <span style={{ position: "absolute", top: 2, right: 2, background: T.delayed, color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 999, minWidth: 15, height: 15, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{notifications.length}</span>}
+            {visibleNotifications.length > 0 && <span style={{ position: "absolute", top: 2, right: 2, background: T.delayed, color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 999, minWidth: 15, height: 15, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{visibleNotifications.length}</span>}
           </button>
           {notifOpen && (
             <div style={{ position: "absolute", right: 0, top: 40, width: 320, background: "#fff", borderRadius: 12, boxShadow: "0 16px 40px rgba(0,0,0,.18)", border: `1px solid ${T.border}`, zIndex: 110, animation: "cct-in .15s ease-out", overflow: "hidden" }}>
               <div style={{ padding: "12px 14px", borderBottom: `1px solid ${T.border}`, fontWeight: 700, fontSize: 13.5 }}>알림</div>
               <div style={{ maxHeight: 320, overflowY: "auto" }}>
-                {notifications.map((n) => {
+                {visibleNotifications.length === 0 && <div style={{ padding: "20px 14px", textAlign: "center", color: T.faint, fontSize: 12.5 }}>알림이 없습니다.</div>}
+                {visibleNotifications.map((n) => {
                   const Icon = NOTIF_ICON[n.kind];
                   return (
                     <div key={n.id} style={{ display: "flex", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${T.canvas}` }}>
@@ -1124,14 +1218,14 @@ export default function CollabControlTower() {
 
       {isAdmin ? (
         adminTab === "monitor" ? (
-          <Dashboard viewer={viewer} tasks={tasks} notifications={notifications} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} canRegister={false} canRequest={true} />
+          <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} canRegister={false} canRequest={true} />
         ) : adminTab === "accounts" ? (
           <AccountsManager accounts={accounts} setAccounts={setAccounts} pushToast={pushToast} />
         ) : (
           <LinkSender accounts={accounts} sentLinks={sentLinks} setSentLinks={setSentLinks} pushToast={pushToast} />
         )
       ) : (
-        <Dashboard viewer={viewer} tasks={tasks} notifications={notifications} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} canRegister={true} canRequest={isHqStaff} />
+        <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} canRegister={true} canRequest={isHqStaff} />
       )}
 
       <Toast toasts={toasts} />
