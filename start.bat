@@ -1,9 +1,11 @@
 @echo off
+chcp 65001 >nul
 setlocal
 
 where node >nul 2>nul
 if errorlevel 1 (
-    echo Node.js가 설치되어 있지 않습니다. https://nodejs.org 에서 설치 후 다시 실행해주세요.
+    echo [ERROR] Node.js is not installed.
+    echo Please install it from https://nodejs.org and run this file again.
     pause
     exit /b 1
 )
@@ -11,16 +13,21 @@ if errorlevel 1 (
 cd /d "%~dp0"
 
 if not exist "node_modules" (
-    echo 의존성을 설치합니다...
+    echo Installing dependencies, this may take a minute...
     call npm install
     if errorlevel 1 (
-        echo npm install에 실패했습니다.
+        echo [ERROR] npm install failed. See the messages above.
         pause
         exit /b 1
     )
 )
 
-echo 개발 서버를 시작합니다... 준비되면 브라우저가 자동으로 열립니다.
+echo Starting dev server... your browser will open automatically once it's ready.
 call npm run dev
+if errorlevel 1 (
+    echo [ERROR] npm run dev exited with an error. See the messages above.
+)
 
-pause
+echo.
+echo Press any key to close this window.
+pause >nul
