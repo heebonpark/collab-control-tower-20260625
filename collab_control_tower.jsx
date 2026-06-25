@@ -4,7 +4,8 @@ import { loadAssignments, saveAssignments } from "./utils/persistence"; // NEW: 
 import { supabase } from "./lib/supabaseClient";
 import {
   fetchAccounts, fetchAdmins, fetchTasks, fetchNotifications, fetchSentLinks,
-  createAccount, updateAccount, deleteAccount,
+  createAccount, updateAccount, deleteAccount, setAccountPassword,
+  verifyStaffLogin, verifyAdminLogin,
   createTask, updateTaskStatus, addTaskLog, requestUpdate,
   fetchAttachments, uploadAttachment, getAttachmentSignedUrl,
   createSentLink, resolveLinkToken, isNotificationForViewer,
@@ -225,15 +226,21 @@ function LoginScreen({ accounts, admins, onLogin }) {
     color: active ? color : T.sub, textAlign: "left", display: "flex", alignItems: "center", gap: 8,
   });
 
-  const submitStaff = () => {
+  const submitStaff = async () => {
     if (!account) { setError("담당자를 선택하세요"); return; }
-    if (password !== account.password) { setError("비밀번호가 일치하지 않습니다"); return; }
-    onLogin({ type: "staff", group: account.group, unitId: account.unitId, unitName: unitInfo(account.unitId).name, role: account.role, name: account.name, accountId: account.id });
+    try {
+      const verified = await verifyStaffLogin(account.id, password);
+      if (!verified) { setError("비밀번호가 일치하지 않습니다"); return; }
+      onLogin({ type: "staff", group: verified.group, unitId: verified.unitId, unitName: unitInfo(verified.unitId).name, role: verified.role, name: verified.name, accountId: verified.id });
+    } catch (e) { setError("로그인에 실패했습니다"); }
   };
-  const submitAdmin = () => {
+  const submitAdmin = async () => {
     if (!admin) { setError("관리자 계정이 없습니다"); return; }
-    if (password !== admin.password) { setError("비밀번호가 일치하지 않습니다"); return; }
-    onLogin({ type: "admin", name: admin.name, adminId: admin.id });
+    try {
+      const verified = await verifyAdminLogin(admin.id, password);
+      if (!verified) { setError("비밀번호가 일치하지 않습니다"); return; }
+      onLogin({ type: "admin", name: verified.name, adminId: verified.id });
+    } catch (e) { setError("로그인에 실패했습니다"); }
   };
 
   return (
@@ -746,12 +753,13 @@ function AccountModal({ initial, onClose, onSave }) {
   const [name, setName] = useState(initial ? initial.name : "");
   const [email, setEmail] = useState(initial ? initial.email : "");
   const [phone, setPhone] = useState(initial ? initial.phone : "");
-  const [password, setPassword] = useState(initial ? initial.password : genPassword());
+  const [password, setPassword] = useState(isEdit ? "" : genPassword());
   const [showPw, setShowPw] = useState(false);
 
   const changeGroup = (g) => { setGroup(g); const u = ORG[g].units[0]; setUnitId(u.id); setRole(u.roles[0]); };
   const changeUnit = (uid) => { setUnitId(uid); setRole(units.find((u) => u.id === uid).roles[0]); };
-  const valid = name.trim().length > 0 && password.trim().length >= 4;
+  const passwordOk = isEdit ? (password.trim().length === 0 || password.trim().length >= 4) : password.trim().length >= 4;
+  const valid = name.trim().length > 0 && passwordOk;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,23,31,.45)", zIndex: 160, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
@@ -797,16 +805,21 @@ function AccountModal({ initial, onClose, onSave }) {
           </div>
         </div>
 
-        <label style={labelStyle}>비밀번호</label>
-        <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-          <input className="cct-input" type={showPw ? "text" : "password"} style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} />
+        <label style={labelStyle}>비밀번호{isEdit && <span style={{ color: T.faint, fontWeight: 500 }}> (변경할 때만 입력)</span>}</label>
+        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+          <input className="cct-input" type={showPw ? "text" : "password"} style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)}
+            placeholder={isEdit ? "비워두면 비밀번호가 변경되지 않습니다" : ""} />
           <button className="cct-btn" onClick={() => setShowPw((s) => !s)} style={{ border: `1px solid ${T.border}`, background: "#fff", borderRadius: 9, padding: "0 10px", cursor: "pointer", color: T.sub, display: "flex", alignItems: "center" }}>{showPw ? <EyeOff size={15} /> : <Eye size={15} />}</button>
           <button className="cct-btn" onClick={() => setPassword(genPassword())} title="자동생성" style={{ border: `1px solid ${T.border}`, background: "#fff", borderRadius: 9, padding: "0 10px", cursor: "pointer", color: T.sub, display: "flex", alignItems: "center" }}><RefreshCw size={15} /></button>
         </div>
+        {isEdit && password.trim().length > 0 && (
+          <div style={{ fontSize: 11.5, color: T.request, marginBottom: 12, fontWeight: 600 }}>저장하면 이 비밀번호로 즉시 변경됩니다. 변경 후에는 다시 조회할 수 없으니 담당자에게 전달해주세요.</div>
+        )}
+        {!(isEdit && password.trim().length > 0) && <div style={{ marginBottom: 18 }} />}
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button className="cct-btn" onClick={onClose} style={{ padding: "10px 16px", borderRadius: 10, border: `1px solid ${T.border}`, background: "#fff", fontSize: 13.5, fontWeight: 600, color: T.sub, cursor: "pointer" }}>취소</button>
-          <button className="cct-btn" disabled={!valid} onClick={() => valid && onSave({ ...(initial || {}), group, unitId, role, name: name.trim(), email, phone, password })} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: valid ? T.admin : T.border, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed" }}>저장</button>
+          <button className="cct-btn" disabled={!valid} onClick={() => valid && onSave({ ...(initial || {}), group, unitId, role, name: name.trim(), email, phone, password: password.trim() || undefined })} style={{ padding: "10px 18px", borderRadius: 10, border: "none", background: valid ? T.admin : T.border, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed" }}>저장</button>
         </div>
       </div>
     </div>
@@ -817,8 +830,17 @@ function AccountsManager({ accounts, setAccounts, pushToast }) {
   const [groupFilter, setGroupFilter] = useState("all");
   const [unitFilter, setUnitFilter] = useState("all");
   const [editing, setEditing] = useState(null); // null | true(new) | account(edit)
-  const [revealId, setRevealId] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [resetPasswords, setResetPasswords] = useState({}); // accountId -> 방금 재설정한 비밀번호(1회 표시용)
+
+  const resetPassword = async (id) => {
+    const newPw = genPassword();
+    try {
+      await setAccountPassword(id, newPw);
+      setResetPasswords((m) => ({ ...m, [id]: newPw }));
+      pushToast("비밀번호가 재설정되었습니다");
+    } catch (e) { console.error(e); pushToast("재설정에 실패했습니다"); }
+  };
 
   const units = groupFilter === "all" ? ALL_UNITS : ALL_UNITS.filter((u) => u.group === groupFilter);
   const rows = accounts.filter((a) => (groupFilter === "all" || a.group === groupFilter) && (unitFilter === "all" || a.unitId === unitFilter));
@@ -876,8 +898,14 @@ function AccountsManager({ accounts, setAccounts, pushToast }) {
             <div style={{ ...cellStyle, fontWeight: 600 }}>{a.name}</div>
             <div style={{ ...cellStyle, fontSize: 11.5, color: T.sub }}>{a.email}<br />{a.phone}</div>
             <div style={cellStyle}>
-              <span className="cct-mono" style={{ marginRight: 6 }}>{revealId === a.id ? a.password : "••••••"}</span>
-              <button className="cct-btn" onClick={() => setRevealId(revealId === a.id ? null : a.id)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.faint, verticalAlign: -3 }}>{revealId === a.id ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+              {resetPasswords[a.id] ? (
+                <>
+                  <span className="cct-mono" style={{ marginRight: 6, color: T.request, fontWeight: 700 }}>{resetPasswords[a.id]}</span>
+                  <button className="cct-btn" onClick={() => setResetPasswords((m) => { const n = { ...m }; delete n[a.id]; return n; })} title="가리기" style={{ border: "none", background: "transparent", cursor: "pointer", color: T.faint, verticalAlign: -3 }}><EyeOff size={13} /></button>
+                </>
+              ) : (
+                <button className="cct-btn" onClick={() => resetPassword(a.id)} style={{ display: "flex", alignItems: "center", gap: 4, border: `1px solid ${T.border}`, background: "#fff", borderRadius: 7, padding: "4px 8px", cursor: "pointer", color: T.sub, fontSize: 11.5 }}><KeyRound size={12} />재설정</button>
+              )}
             </div>
             <div style={{ ...cellStyle, display: "flex", gap: 6 }}>
               <button className="cct-btn" onClick={() => setEditing(a)} style={{ border: `1px solid ${T.border}`, background: "#fff", borderRadius: 7, padding: "5px 7px", cursor: "pointer", color: T.sub, display: "flex" }}><Pencil size={13} /></button>
