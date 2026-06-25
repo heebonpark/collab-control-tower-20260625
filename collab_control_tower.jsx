@@ -1156,8 +1156,8 @@ export default function CollabControlTower() {
     } catch (e) { console.error(e); pushToast("파일 업로드에 실패했습니다"); throw e; }
   };
 
-  const NOTIF_ICON = { delayed: AlertTriangle, due: Clock, assign: Send, done: CheckCircle2, request: Megaphone, status: CheckCircle2, update: MessageSquare };
-  const NOTIF_COLOR = { delayed: T.delayed, due: T.hold, assign: T.hq, done: T.done, request: T.request, status: T.progress, update: T.branch };
+  const NOTIF_ICON = { delayed: AlertTriangle, due: Clock, assign: Send, done: CheckCircle2, request: Megaphone, status: CheckCircle2, update: MessageSquare, feedback: MessageSquare };
+  const NOTIF_COLOR = { delayed: T.delayed, due: T.hold, assign: T.hq, done: T.done, request: T.request, status: T.progress, update: T.branch, feedback: T.hq };
 
   if (!tokenChecked || !dataLoaded) {
     return (
