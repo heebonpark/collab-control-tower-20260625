@@ -4,6 +4,7 @@ import { loadAssignments, saveAssignments } from "./utils/persistence"; // NEW: 
 import { supabase } from "./lib/supabaseClient";
 import {
   fetchAccounts, fetchAdmins, fetchTasks, fetchNotifications, fetchSentLinks,
+  fetchCategories, createCategory, createCategoryItem,
   createAccount, updateAccount, deleteAccount, setAccountPassword,
   verifyStaffLogin, verifyAdminLogin,
   createTask, updateTaskStatus, updateTaskDetails, deleteTask, addTaskLog, requestUpdate,
@@ -87,37 +88,15 @@ const ORG = {
 const ALL_UNITS = [...ORG.hq.units.map(u => ({ ...u, group: "hq" })), ...ORG.branch.units.map(u => ({ ...u, group: "branch" }))];
 
 /* ---------------------------------------------------------
-   업무 카탈로그
+   업무 카탈로그 — 구분/세부업무는 DB(categories/category_items)에서 로드.
+   관리자가 화면에서 새 구분/세부업무를 추가할 수 있다.
 --------------------------------------------------------- */
-const CATALOG = [
-  { id: "install", name: "설치공사", color: "#3851D6", items: [
-      { id: "install-sims", name: "설치공사 일반공사, 입찰공사 SIMS 배정업무", cycle: ["매일"] },
-      { id: "install-info", name: "설치공사팀 정보 수정 관리", cycle: ["상시"] },
-      { id: "install-support", name: "지사 공사팀 섭외 요청건 지원", cycle: ["상시"] },
-      { id: "install-settle", name: "설치공사비 정산", cycle: ["월마감"] },
-      { id: "install-arpu", name: "고ARPU 사전검토 및 설변시설 검도 승인", cycle: ["상시"] },
-      { id: "install-verify", name: "i형 영상 난공사 검증", cycle: ["월3회"] },
-      { id: "install-safety", name: "AS 및 공사현장 안전검검 일일보고", cycle: ["매일", "월마감"] },
-    ] },
-  { id: "rate", name: "설변징수율", color: "#1FA67A", items: [
-      { id: "rate-share", name: "일일 실적 공유", cycle: ["매일"] },
-      { id: "rate-collect", name: "미징수 확인 및 독려", cycle: ["매일"] },
-    ] },
-  { id: "vehicle", name: "차량", color: "#9B5DE5", items: [
-      { id: "vehicle-month", name: "차량 월 마감 업무(과태료 등)", cycle: ["월마감"] },
-      { id: "vehicle-clean", name: "이륜차 청결유지비 지급", cycle: ["월마감"] },
-      { id: "vehicle-accident", name: "차량사고 보고(출동서비스팀 회신)", cycle: ["상시"] },
-    ] },
-  { id: "goods", name: "물품", color: "#C28E1F", items: [
-      { id: "goods-request", name: "지사 요청 물품 신청(운영혁신팀, 자산관리팀 등)", cycle: ["상시"] },
-      { id: "goods-material", name: "직영공사자재, 유지보수 공구 등", cycle: ["분기별"] },
-    ] },
-];
+const CATEGORY_COLOR_PRESETS = ["#3851D6", "#1FA67A", "#9B5DE5", "#C28E1F", "#E08A2C", "#E5484D", "#0EA5E9", "#D946EF"];
 const CYCLE_STYLE = { "매일": { color: T.progress }, "상시": { color: T.faint }, "월마감": { color: T.delayed }, "월3회": { color: "#9B5DE5" }, "분기별": { color: "#1FA67A" } };
 const CYCLE_LIST = ["매일", "상시", "월마감", "월3회", "분기별"];
 
-function findItem(categoryId, itemId) {
-  const cat = CATALOG.find((c) => c.id === categoryId);
+function findItem(categories, categoryId, itemId) {
+  const cat = categories.find((c) => c.id === categoryId);
   const item = cat && cat.items.find((i) => i.id === itemId);
   return { cat, item };
 }
@@ -178,8 +157,8 @@ function OrgBadge({ unitId, role, compact }) {
     </span>
   );
 }
-function CategoryTag({ categoryId }) {
-  const c = CATALOG.find((x) => x.id === categoryId);
+function CategoryTag({ categoryId, categories }) {
+  const c = categories.find((x) => x.id === categoryId);
   if (!c) return null;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, color: c.color }}>
@@ -332,7 +311,7 @@ function LoginScreen({ accounts, admins, onLogin }) {
 /* ---------------------------------------------------------
    업무 등록 모달
 --------------------------------------------------------- */
-function TaskModal({ currentUser, accounts, onClose, onCreate }) {
+function TaskModal({ currentUser, accounts, categories, onAddCategory, onAddCategoryItem, onClose, onCreate }) {
   const isAdminCreator = currentUser.type === "admin";
   const [ownerGroup, setOwnerGroup] = useState(isAdminCreator ? "branch" : currentUser.group);
   const [ownerUnitId, setOwnerUnitId] = useState(isAdminCreator ? ORG.branch.units[0].id : currentUser.unitId);
@@ -353,15 +332,44 @@ function TaskModal({ currentUser, accounts, onClose, onCreate }) {
     setOwnerAccountId(accs[0] ? accs[0].id : null);
   };
 
-  const [categoryId, setCategoryId] = useState(CATALOG[0].id);
-  const cat = CATALOG.find((c) => c.id === categoryId);
-  const [itemId, setItemId] = useState(cat.items[0].id);
-  const { item } = findItem(categoryId, itemId);
+  const [categoryId, setCategoryId] = useState(categories[0] ? categories[0].id : null);
+  const cat = categories.find((c) => c.id === categoryId) || null;
+  const [itemId, setItemId] = useState(cat && cat.items[0] ? cat.items[0].id : null);
+  const { item } = findItem(categories, categoryId, itemId);
   const [priority, setPriority] = useState("mid");
   const [due, setDue] = useState(new Date().toISOString().slice(0, 10));
   const [desc, setDesc] = useState("");
-  const changeCategory = (cid) => { setCategoryId(cid); setItemId(CATALOG.find((c) => c.id === cid).items[0].id); };
-  const valid = desc.trim().length > 0 && (!isAdminCreator || !!ownerAccount);
+  const changeCategory = (cid) => {
+    setCategoryId(cid);
+    const c = categories.find((x) => x.id === cid);
+    setItemId(c && c.items[0] ? c.items[0].id : null);
+  };
+  const valid = desc.trim().length > 0 && !!cat && !!item && (!isAdminCreator || !!ownerAccount);
+
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [newCatColor, setNewCatColor] = useState(CATEGORY_COLOR_PRESETS[0]);
+  const submitAddCategory = async () => {
+    if (!newCatName.trim()) return;
+    const created = await onAddCategory({ name: newCatName.trim(), color: newCatColor });
+    setCategoryId(created.id);
+    setItemId(null);
+    setNewCatName("");
+    setShowAddCategory(false);
+  };
+
+  const [showAddItem, setShowAddItem] = useState(false);
+  const [newItemName, setNewItemName] = useState("");
+  const [newItemCycle, setNewItemCycle] = useState(new Set());
+  const toggleNewItemCycle = (c) => setNewItemCycle((prev) => { const next = new Set(prev); next.has(c) ? next.delete(c) : next.add(c); return next; });
+  const submitAddItem = async () => {
+    if (!newItemName.trim() || newItemCycle.size === 0 || !categoryId) return;
+    const created = await onAddCategoryItem({ categoryId, name: newItemName.trim(), cycle: [...newItemCycle] });
+    setItemId(created.id);
+    setNewItemName("");
+    setNewItemCycle(new Set());
+    setShowAddItem(false);
+  };
 
   const submit = () => {
     if (!valid) return;
@@ -406,8 +414,8 @@ function TaskModal({ currentUser, accounts, onClose, onCreate }) {
         )}
 
         <label style={labelStyle}>구분</label>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 14 }}>
-          {CATALOG.map((c) => (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 8 }}>
+          {categories.map((c) => (
             <button key={c.id} className="cct-chip" onClick={() => changeCategory(c.id)} style={{
               padding: "8px 6px", borderRadius: 9, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
               border: `1.5px solid ${categoryId === c.id ? c.color : T.border}`,
@@ -415,14 +423,53 @@ function TaskModal({ currentUser, accounts, onClose, onCreate }) {
             }}>{c.name}</button>
           ))}
         </div>
+        {isAdminCreator && (
+          showAddCategory ? (
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center" }}>
+              <input className="cct-input" style={{ ...inputStyle, flex: 1 }} placeholder="새 구분 이름 (예: 회선관리)" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} />
+              <div style={{ display: "flex", gap: 3 }}>
+                {CATEGORY_COLOR_PRESETS.map((c) => (
+                  <button key={c} onClick={() => setNewCatColor(c)} style={{ width: 20, height: 20, borderRadius: "50%", background: c, border: newCatColor === c ? `2px solid ${T.ink}` : "2px solid transparent", cursor: "pointer", padding: 0 }} />
+                ))}
+              </div>
+              <button className="cct-btn" onClick={submitAddCategory} style={{ border: "none", background: T.admin, color: "#fff", borderRadius: 7, padding: "8px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>추가</button>
+              <button className="cct-btn" onClick={() => setShowAddCategory(false)} style={{ border: "none", background: "transparent", color: T.faint, cursor: "pointer" }}><X size={14} /></button>
+            </div>
+          ) : (
+            <button className="cct-btn" onClick={() => setShowAddCategory(true)} style={{ display: "flex", alignItems: "center", gap: 4, border: "none", background: "transparent", color: T.admin, cursor: "pointer", fontSize: 12, fontWeight: 700, marginBottom: 14, padding: 0 }}><Plus size={13} />새 구분 추가</button>
+          )
+        )}
 
         <label style={labelStyle}>세부업무</label>
-        <select className="cct-input" style={{ ...inputStyle, marginBottom: 10 }} value={itemId} onChange={(e) => setItemId(e.target.value)}>
-          {cat.items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-        </select>
-        <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11.5, color: T.faint }}>등록 주기</span><CycleTags cycle={item.cycle} />
-        </div>
+        {cat && (
+          <select className="cct-input" style={{ ...inputStyle, marginBottom: 10 }} value={itemId || ""} onChange={(e) => setItemId(e.target.value)}>
+            {cat.items.length === 0 && <option value="">등록된 세부업무 없음</option>}
+            {cat.items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+        )}
+        {item && (
+          <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11.5, color: T.faint }}>등록 주기</span><CycleTags cycle={item.cycle} />
+          </div>
+        )}
+        {isAdminCreator && cat && (
+          showAddItem ? (
+            <div style={{ marginBottom: 16, background: T.canvas, borderRadius: 9, padding: 10 }}>
+              <input className="cct-input" style={{ ...inputStyle, marginBottom: 8 }} placeholder="새 세부업무 이름" value={newItemName} onChange={(e) => setNewItemName(e.target.value)} />
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+                {CYCLE_LIST.map((c) => (
+                  <button key={c} onClick={() => toggleNewItemCycle(c)} style={{ padding: "4px 9px", borderRadius: 999, cursor: "pointer", fontSize: 11, fontWeight: 700, border: `1.5px solid ${newItemCycle.has(c) ? CYCLE_STYLE[c].color : T.border}`, color: newItemCycle.has(c) ? CYCLE_STYLE[c].color : T.sub, background: newItemCycle.has(c) ? `${CYCLE_STYLE[c].color}14` : "#fff" }}>{c}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button className="cct-btn" onClick={() => setShowAddItem(false)} style={{ border: `1px solid ${T.border}`, background: "#fff", borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: 12, color: T.sub }}>취소</button>
+                <button className="cct-btn" onClick={submitAddItem} style={{ border: "none", background: T.admin, color: "#fff", borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>추가</button>
+              </div>
+            </div>
+          ) : (
+            <button className="cct-btn" onClick={() => setShowAddItem(true)} style={{ display: "flex", alignItems: "center", gap: 4, border: "none", background: "transparent", color: T.admin, cursor: "pointer", fontSize: 12, fontWeight: 700, marginBottom: 16, padding: 0 }}><Plus size={13} />새 세부업무 추가</button>
+          )
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
           <div>
@@ -455,7 +502,7 @@ function TaskModal({ currentUser, accounts, onClose, onCreate }) {
 /* ---------------------------------------------------------
    업무 상세 패널
 --------------------------------------------------------- */
-function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, onUpdateTask, onDeleteTask }) {
+function DetailPanel({ task, currentUser, categories, canRequest, onClose, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, onUpdateTask, onDeleteTask }) {
   const [comment, setComment] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -546,7 +593,7 @@ function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, o
           </div>
         )}
         <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-          <CategoryTag categoryId={task.categoryId} /><CycleTags cycle={task.cycle} />
+          <CategoryTag categoryId={task.categoryId} categories={categories} /><CycleTags cycle={task.cycle} />
           {!editing && <span style={{ fontSize: 12.5, color: PRIORITY[task.priority].color, fontWeight: 700 }}>우선순위 {PRIORITY[task.priority].label}</span>}
         </div>
 
@@ -659,7 +706,7 @@ function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, o
 /* ---------------------------------------------------------
    대시보드 (담당자/본부/관리자 공용)
 --------------------------------------------------------- */
-function Dashboard({ viewer, tasks, notifications, accounts, onCreate, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, onUpdateTask, onDeleteTask, canRegister, canRequest }) {
+function Dashboard({ viewer, tasks, notifications, accounts, categories, onAddCategory, onAddCategoryItem, onCreate, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, onUpdateTask, onDeleteTask, canRegister, canRequest }) {
   const [regionAssignments, setRegionAssignments] = useState(() => loadAssignments() || {}); // NEW: region assignments state
   const [query, setQuery] = useState("");
   const [scopeFilter, setScopeFilter] = useState("all");
@@ -697,7 +744,7 @@ function Dashboard({ viewer, tasks, notifications, accounts, onCreate, onUpdateS
   }, [scoped]);
 
   const pieData = useMemo(() => Object.entries(STATUS).map(([k, v]) => ({ name: v.label, value: scoped.filter((t) => t.status === k).length, color: v.color })).filter((d) => d.value > 0), [scoped]);
-  const barData = useMemo(() => CATALOG.map((c) => ({ name: c.name, value: scoped.filter((t) => t.categoryId === c.id).length, color: c.color })), [scoped]);
+  const barData = useMemo(() => categories.map((c) => ({ name: c.name, value: scoped.filter((t) => t.categoryId === c.id).length, color: c.color })), [scoped, categories]);
 
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
@@ -727,7 +774,7 @@ function Dashboard({ viewer, tasks, notifications, accounts, onCreate, onUpdateS
           )}
 
           <div style={{ fontSize: 11.5, fontWeight: 700, color: T.faint, margin: "18px 0 10px", letterSpacing: .3 }}>구분</div>
-          {CATALOG.map((c) => (
+          {categories.map((c) => (
             <button key={c.id} className="cct-chip" onClick={() => toggleCategory(c.id)} style={{
               display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", cursor: "pointer", border: "none",
               background: categoryFilter.has(c.id) ? `${c.color}14` : "transparent", borderRadius: 8, padding: "7px 10px", marginBottom: 3,
@@ -822,7 +869,7 @@ function Dashboard({ viewer, tasks, notifications, accounts, onCreate, onUpdateS
                     <div style={{ fontSize: 11.5, color: T.faint, marginTop: 2 }}>{t.owner} · {t.role}</div>
                   </div>
                   <div><OrgBadge unitId={t.unitId} compact /></div>
-                  <div><CategoryTag categoryId={t.categoryId} /></div>
+                  <div><CategoryTag categoryId={t.categoryId} categories={categories} /></div>
                   <div><CycleTags cycle={t.cycle} /></div>
                   <div style={{ color: PRIORITY[t.priority].color, fontWeight: 700, fontSize: 12 }}>{PRIORITY[t.priority].label}</div>
                   <div className="cct-mono" style={{ fontSize: 12, color: dleft < 0 && t.status !== "done" ? T.delayed : T.sub }}>{t.due}{dleft < 0 && t.status !== "done" ? ` (D+${-dleft})` : ""}</div>
@@ -835,9 +882,12 @@ function Dashboard({ viewer, tasks, notifications, accounts, onCreate, onUpdateS
         </div>
       </div>
 
-      {showModal && <TaskModal currentUser={viewer} accounts={accounts} onClose={() => setShowModal(false)} onCreate={(f) => { onCreate(f); setShowModal(false); }} />}
+      {showModal && (
+        <TaskModal currentUser={viewer} accounts={accounts} categories={categories} onAddCategory={onAddCategory} onAddCategoryItem={onAddCategoryItem}
+          onClose={() => setShowModal(false)} onCreate={(f) => { onCreate(f); setShowModal(false); }} />
+      )}
       {selectedTask && (
-        <DetailPanel task={tasks.find((t) => t.id === selectedTask.id) || selectedTask} currentUser={viewer.raw} canRequest={canRequest}
+        <DetailPanel task={tasks.find((t) => t.id === selectedTask.id) || selectedTask} currentUser={viewer.raw} categories={categories} canRequest={canRequest}
           onClose={() => setSelectedTask(null)} onUpdateStatus={onUpdateStatus} onAddLog={onAddLog} onRequestUpdate={onRequestUpdate}
           onUploadAttachment={onUploadAttachment} onUpdateTask={onUpdateTask}
           onDeleteTask={(id) => { onDeleteTask(id); setSelectedTask(null); }} />
@@ -1132,6 +1182,7 @@ export default function CollabControlTower() {
   const [sentLinks, setSentLinks] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [adminTab, setAdminTab] = useState("monitor");
@@ -1168,11 +1219,11 @@ export default function CollabControlTower() {
     let cancelled = false;
     (async () => {
       try {
-        const [acc, adm, tk, nf, sl] = await Promise.all([
-          fetchAccounts(), fetchAdmins(), fetchTasks(), fetchNotifications(), fetchSentLinks(),
+        const [acc, adm, tk, nf, sl, cat] = await Promise.all([
+          fetchAccounts(), fetchAdmins(), fetchTasks(), fetchNotifications(), fetchSentLinks(), fetchCategories(),
         ]);
         if (cancelled) return;
-        setAccounts(acc); setAdmins(adm); setTasks(tk); setNotifications(nf); setSentLinks(sl);
+        setAccounts(acc); setAdmins(adm); setTasks(tk); setNotifications(nf); setSentLinks(sl); setCategories(cat);
       } catch (e) {
         console.error(e);
         pushToast("데이터를 불러오지 못했습니다. Supabase 설정을 확인하세요.");
@@ -1205,6 +1256,8 @@ export default function CollabControlTower() {
       .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => fetchNotifications().then(setNotifications).catch(() => {}))
       .on("postgres_changes", { event: "*", schema: "public", table: "accounts" }, () => fetchAccounts().then(setAccounts).catch(() => {}))
       .on("postgres_changes", { event: "*", schema: "public", table: "sent_links" }, () => fetchSentLinks().then(setSentLinks).catch(() => {}))
+      .on("postgres_changes", { event: "*", schema: "public", table: "categories" }, () => fetchCategories().then(setCategories).catch(() => {}))
+      .on("postgres_changes", { event: "*", schema: "public", table: "category_items" }, () => fetchCategories().then(setCategories).catch(() => {}))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, []);
@@ -1215,7 +1268,7 @@ export default function CollabControlTower() {
   );
 
   const handleCreate = async (form) => {
-    const { item } = findItem(form.categoryId, form.itemId);
+    const { item } = findItem(categories, form.categoryId, form.itemId);
     try {
       const newTask = await createTask({
         categoryId: form.categoryId, itemId: form.itemId, title: item.name, cycle: item.cycle,
@@ -1242,6 +1295,24 @@ export default function CollabControlTower() {
       setTasks((ts) => ts.filter((t) => t.id !== id));
       pushToast("업무가 삭제되었습니다");
     } catch (e) { console.error(e); pushToast("삭제에 실패했습니다"); }
+  };
+
+  const handleAddCategory = async ({ name, color }) => {
+    try {
+      const created = await createCategory({ name, color });
+      setCategories((cs) => [...cs, { ...created, items: [] }]);
+      pushToast("구분이 추가되었습니다");
+      return created;
+    } catch (e) { console.error(e); pushToast("구분 추가에 실패했습니다"); throw e; }
+  };
+
+  const handleAddCategoryItem = async ({ categoryId, name, cycle }) => {
+    try {
+      const created = await createCategoryItem({ categoryId, name, cycle });
+      setCategories((cs) => cs.map((c) => c.id === categoryId ? { ...c, items: [...c.items, created] } : c));
+      pushToast("세부업무가 추가되었습니다");
+      return created;
+    } catch (e) { console.error(e); pushToast("세부업무 추가에 실패했습니다"); throw e; }
   };
 
   const handleUpdateStatus = async (id, status) => {
@@ -1369,14 +1440,14 @@ export default function CollabControlTower() {
 
       {isAdmin ? (
         adminTab === "monitor" ? (
-          <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} accounts={accounts} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} onUpdateTask={handleUpdateTask} onDeleteTask={handleDeleteTask} canRegister={true} canRequest={true} />
+          <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} accounts={accounts} categories={categories} onAddCategory={handleAddCategory} onAddCategoryItem={handleAddCategoryItem} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} onUpdateTask={handleUpdateTask} onDeleteTask={handleDeleteTask} canRegister={true} canRequest={true} />
         ) : adminTab === "accounts" ? (
           <AccountsManager accounts={accounts} setAccounts={setAccounts} pushToast={pushToast} />
         ) : (
           <LinkSender accounts={accounts} sentLinks={sentLinks} setSentLinks={setSentLinks} pushToast={pushToast} />
         )
       ) : (
-        <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} accounts={accounts} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} onUpdateTask={handleUpdateTask} onDeleteTask={handleDeleteTask} canRegister={true} canRequest={isHqStaff} />
+        <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} accounts={accounts} categories={categories} onAddCategory={handleAddCategory} onAddCategoryItem={handleAddCategoryItem} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} onUpdateTask={handleUpdateTask} onDeleteTask={handleDeleteTask} canRegister={true} canRequest={isHqStaff} />
       )}
 
       <Toast toasts={toasts} />
