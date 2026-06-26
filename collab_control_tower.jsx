@@ -6,7 +6,7 @@ import {
   fetchAccounts, fetchAdmins, fetchTasks, fetchNotifications, fetchSentLinks,
   createAccount, updateAccount, deleteAccount, setAccountPassword,
   verifyStaffLogin, verifyAdminLogin,
-  createTask, updateTaskStatus, addTaskLog, requestUpdate,
+  createTask, updateTaskStatus, updateTaskDetails, deleteTask, addTaskLog, requestUpdate,
   fetchAttachments, uploadAttachment, getAttachmentSignedUrl,
   createSentLink, resolveLinkToken, isNotificationForViewer,
 } from "./lib/api";
@@ -332,7 +332,27 @@ function LoginScreen({ accounts, admins, onLogin }) {
 /* ---------------------------------------------------------
    업무 등록 모달
 --------------------------------------------------------- */
-function TaskModal({ currentUser, onClose, onCreate }) {
+function TaskModal({ currentUser, accounts, onClose, onCreate }) {
+  const isAdminCreator = currentUser.type === "admin";
+  const [ownerGroup, setOwnerGroup] = useState(isAdminCreator ? "branch" : currentUser.group);
+  const [ownerUnitId, setOwnerUnitId] = useState(isAdminCreator ? ORG.branch.units[0].id : currentUser.unitId);
+  const ownerUnitAccounts = isAdminCreator ? (accounts || []).filter((a) => a.unitId === ownerUnitId) : [];
+  const [ownerAccountId, setOwnerAccountId] = useState(ownerUnitAccounts[0] ? ownerUnitAccounts[0].id : null);
+  const ownerAccount = ownerUnitAccounts.find((a) => a.id === ownerAccountId);
+
+  const changeOwnerGroup = (g) => {
+    setOwnerGroup(g);
+    const u = ORG[g].units[0];
+    setOwnerUnitId(u.id);
+    const accs = (accounts || []).filter((a) => a.unitId === u.id);
+    setOwnerAccountId(accs[0] ? accs[0].id : null);
+  };
+  const changeOwnerUnit = (uid) => {
+    setOwnerUnitId(uid);
+    const accs = (accounts || []).filter((a) => a.unitId === uid);
+    setOwnerAccountId(accs[0] ? accs[0].id : null);
+  };
+
   const [categoryId, setCategoryId] = useState(CATALOG[0].id);
   const cat = CATALOG.find((c) => c.id === categoryId);
   const [itemId, setItemId] = useState(cat.items[0].id);
@@ -341,7 +361,16 @@ function TaskModal({ currentUser, onClose, onCreate }) {
   const [due, setDue] = useState(new Date().toISOString().slice(0, 10));
   const [desc, setDesc] = useState("");
   const changeCategory = (cid) => { setCategoryId(cid); setItemId(CATALOG.find((c) => c.id === cid).items[0].id); };
-  const valid = desc.trim().length > 0;
+  const valid = desc.trim().length > 0 && (!isAdminCreator || !!ownerAccount);
+
+  const submit = () => {
+    if (!valid) return;
+    if (isAdminCreator) {
+      onCreate({ categoryId, itemId, priority, due, desc, unitId: ownerUnitId, role: ownerAccount.role, owner: ownerAccount.name });
+    } else {
+      onCreate({ categoryId, itemId, priority, due, desc });
+    }
+  };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,23,31,.45)", zIndex: 150, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
@@ -350,10 +379,31 @@ function TaskModal({ currentUser, onClose, onCreate }) {
           <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: T.ink }}>업무 등록</h3>
           <button className="cct-btn" onClick={onClose} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.faint }}><X size={18} /></button>
         </div>
-        <div style={{ marginBottom: 16 }}>
-          <OrgBadge unitId={currentUser.unitId} role={currentUser.role} compact />
-          <span style={{ marginLeft: 8, fontSize: 12.5, color: T.faint }}>{currentUser.name} 님으로 등록됩니다</span>
-        </div>
+
+        {isAdminCreator ? (
+          <div style={{ marginBottom: 16 }}>
+            <label style={labelStyle}>담당자 (이 업무가 등록될 소속)</label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              {["hq", "branch"].map((g) => (
+                <button key={g} className="cct-chip" onClick={() => changeOwnerGroup(g)} style={{ padding: "8px 0", borderRadius: 9, cursor: "pointer", fontSize: 12.5, fontWeight: 700, border: `1.5px solid ${ownerGroup === g ? ORG[g].color : T.border}`, color: ownerGroup === g ? ORG[g].color : T.sub, background: ownerGroup === g ? ORG[g].soft : "#fff" }}>{ORG[g].label}</button>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <select className="cct-input" style={inputStyle} value={ownerUnitId} onChange={(e) => changeOwnerUnit(e.target.value)}>
+                {ORG[ownerGroup].units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+              <select className="cct-input" style={inputStyle} value={ownerAccountId || ""} onChange={(e) => setOwnerAccountId(e.target.value)}>
+                {ownerUnitAccounts.length === 0 && <option value="">등록된 계정 없음</option>}
+                {ownerUnitAccounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.role})</option>)}
+              </select>
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginBottom: 16 }}>
+            <OrgBadge unitId={currentUser.unitId} role={currentUser.role} compact />
+            <span style={{ marginLeft: 8, fontSize: 12.5, color: T.faint }}>{currentUser.name} 님으로 등록됩니다</span>
+          </div>
+        )}
 
         <label style={labelStyle}>구분</label>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 14 }}>
@@ -393,7 +443,7 @@ function TaskModal({ currentUser, onClose, onCreate }) {
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button className="cct-btn" onClick={onClose} style={{ padding: "10px 16px", borderRadius: 10, border: `1px solid ${T.border}`, background: "#fff", fontSize: 13.5, fontWeight: 600, color: T.sub, cursor: "pointer" }}>취소</button>
-          <button className="cct-btn" disabled={!valid} onClick={() => valid && onCreate({ categoryId, itemId, priority, due, desc })} style={{
+          <button className="cct-btn" disabled={!valid} onClick={submit} style={{
             padding: "10px 18px", borderRadius: 10, border: "none", background: valid ? T.hq : T.border, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed",
           }}>등록하기</button>
         </div>
@@ -405,11 +455,25 @@ function TaskModal({ currentUser, onClose, onCreate }) {
 /* ---------------------------------------------------------
    업무 상세 패널
 --------------------------------------------------------- */
-function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment }) {
+function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, onUpdateTask, onDeleteTask }) {
   const [comment, setComment] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+  const isAdmin = currentUser.type === "admin";
+  const [editing, setEditing] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [editPriority, setEditPriority] = useState(task ? task.priority : "mid");
+  const [editDue, setEditDue] = useState(task ? task.due : "");
+  const [editDesc, setEditDesc] = useState(task ? task.desc : "");
+
+  useEffect(() => {
+    if (!task) return;
+    setEditPriority(task.priority);
+    setEditDue(task.due);
+    setEditDesc(task.desc);
+    setEditing(false);
+  }, [task && task.id]);
 
   useEffect(() => {
     if (!task) return;
@@ -457,7 +521,22 @@ function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, o
           <OrgBadge unitId={task.unitId} role={task.role} compact />
           <h3 style={{ margin: "8px 0 0", fontSize: 15.5, fontWeight: 800, color: T.ink, lineHeight: 1.4 }}>{task.title}</h3>
         </div>
-        <button className="cct-btn" onClick={onClose} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.faint, flexShrink: 0 }}><X size={18} /></button>
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          {isAdmin && !editing && (
+            <button className="cct-btn" onClick={() => setEditing(true)} title="수정" style={{ border: "none", background: "transparent", cursor: "pointer", color: T.faint }}><Pencil size={16} /></button>
+          )}
+          {isAdmin && (
+            confirmDel ? (
+              <>
+                <button className="cct-btn" onClick={() => onDeleteTask(task.id)} style={{ border: "none", background: T.delayed, color: "#fff", borderRadius: 7, padding: "4px 8px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>삭제</button>
+                <button className="cct-btn" onClick={() => setConfirmDel(false)} style={{ border: `1px solid ${T.border}`, background: "#fff", borderRadius: 7, padding: "4px 8px", cursor: "pointer", fontSize: 11, color: T.sub }}>취소</button>
+              </>
+            ) : (
+              <button className="cct-btn" onClick={() => setConfirmDel(true)} title="삭제" style={{ border: "none", background: "transparent", cursor: "pointer", color: T.faint }}><Trash2 size={16} /></button>
+            )
+          )}
+          <button className="cct-btn" onClick={onClose} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.faint }}><X size={18} /></button>
+        </div>
       </div>
 
       <div style={{ padding: 18, overflowY: "auto", flex: 1 }}>
@@ -468,12 +547,38 @@ function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, o
         )}
         <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
           <CategoryTag categoryId={task.categoryId} /><CycleTags cycle={task.cycle} />
-          <span style={{ fontSize: 12.5, color: PRIORITY[task.priority].color, fontWeight: 700 }}>우선순위 {PRIORITY[task.priority].label}</span>
+          {!editing && <span style={{ fontSize: 12.5, color: PRIORITY[task.priority].color, fontWeight: 700 }}>우선순위 {PRIORITY[task.priority].label}</span>}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 13, color: dleft < 0 && task.status !== "done" ? T.delayed : T.sub, fontWeight: dleft < 0 ? 700 : 500 }}>
-          <Calendar size={14} /> 처리기한 {task.due} {dleft < 0 ? `(D+${-dleft} 지연)` : dleft === 0 ? "(오늘 마감)" : `(D-${dleft})`}
-        </div>
-        <p style={{ fontSize: 13.5, color: T.sub, lineHeight: 1.6, marginBottom: 18 }}>{task.desc}</p>
+
+        {editing ? (
+          <div style={{ marginBottom: 18, background: T.canvas, borderRadius: 10, padding: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <div>
+                <label style={labelStyle}>우선순위</label>
+                <select className="cct-input" style={inputStyle} value={editPriority} onChange={(e) => setEditPriority(e.target.value)}>
+                  {Object.entries(PRIORITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>처리 기한</label>
+                <input className="cct-input" type="date" style={inputStyle} value={editDue} onChange={(e) => setEditDue(e.target.value)} />
+              </div>
+            </div>
+            <label style={labelStyle}>처리 내용 / 비고</label>
+            <textarea className="cct-input" style={{ ...inputStyle, marginBottom: 10, minHeight: 60, resize: "vertical" }} value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="cct-btn" onClick={() => setEditing(false)} style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: "#fff", fontSize: 12.5, fontWeight: 600, color: T.sub, cursor: "pointer" }}>취소</button>
+              <button className="cct-btn" onClick={() => { onUpdateTask(task.id, { priority: editPriority, due: editDue, desc: editDesc }); setEditing(false); }} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: T.admin, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>저장</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 13, color: dleft < 0 && task.status !== "done" ? T.delayed : T.sub, fontWeight: dleft < 0 ? 700 : 500 }}>
+              <Calendar size={14} /> 처리기한 {task.due} {dleft < 0 ? `(D+${-dleft} 지연)` : dleft === 0 ? "(오늘 마감)" : `(D-${dleft})`}
+            </div>
+            <p style={{ fontSize: 13.5, color: T.sub, lineHeight: 1.6, marginBottom: 18 }}>{task.desc}</p>
+          </>
+        )}
 
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 12.5, fontWeight: 700, color: T.sub, marginBottom: 8, display: "block" }}>상태 변경</label>
@@ -554,7 +659,7 @@ function DetailPanel({ task, currentUser, canRequest, onClose, onUpdateStatus, o
 /* ---------------------------------------------------------
    대시보드 (담당자/본부/관리자 공용)
 --------------------------------------------------------- */
-function Dashboard({ viewer, tasks, notifications, onCreate, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, canRegister, canRequest }) {
+function Dashboard({ viewer, tasks, notifications, accounts, onCreate, onUpdateStatus, onAddLog, onRequestUpdate, onUploadAttachment, onUpdateTask, onDeleteTask, canRegister, canRequest }) {
   const [regionAssignments, setRegionAssignments] = useState(() => loadAssignments() || {}); // NEW: region assignments state
   const [query, setQuery] = useState("");
   const [scopeFilter, setScopeFilter] = useState("all");
@@ -730,11 +835,12 @@ function Dashboard({ viewer, tasks, notifications, onCreate, onUpdateStatus, onA
         </div>
       </div>
 
-      {showModal && <TaskModal currentUser={viewer} onClose={() => setShowModal(false)} onCreate={(f) => { onCreate(f); setShowModal(false); }} />}
+      {showModal && <TaskModal currentUser={viewer} accounts={accounts} onClose={() => setShowModal(false)} onCreate={(f) => { onCreate(f); setShowModal(false); }} />}
       {selectedTask && (
         <DetailPanel task={tasks.find((t) => t.id === selectedTask.id) || selectedTask} currentUser={viewer.raw} canRequest={canRequest}
           onClose={() => setSelectedTask(null)} onUpdateStatus={onUpdateStatus} onAddLog={onAddLog} onRequestUpdate={onRequestUpdate}
-          onUploadAttachment={onUploadAttachment} />
+          onUploadAttachment={onUploadAttachment} onUpdateTask={onUpdateTask}
+          onDeleteTask={(id) => { onDeleteTask(id); setSelectedTask(null); }} />
       )}
     </div>
   );
@@ -1113,12 +1219,29 @@ export default function CollabControlTower() {
     try {
       const newTask = await createTask({
         categoryId: form.categoryId, itemId: form.itemId, title: item.name, cycle: item.cycle,
-        unitId: currentUser.unitId, role: currentUser.role, owner: currentUser.name,
+        unitId: form.unitId || currentUser.unitId, role: form.role || currentUser.role, owner: form.owner || currentUser.name,
         priority: form.priority, due: form.due, desc: form.desc,
       }, actorFrom());
       setTasks((ts) => [newTask, ...ts]);
       pushToast("업무가 등록되었습니다");
     } catch (e) { console.error(e); pushToast("업무 등록에 실패했습니다"); }
+  };
+
+  const handleUpdateTask = async (id, fields) => {
+    try {
+      const current = tasks.find((t) => t.id === id);
+      const { task, log } = await updateTaskDetails(id, { ...fields, unitId: current.unitId, role: current.role, owner: current.owner }, actorFrom());
+      setTasks((ts) => ts.map((t) => t.id === id ? { ...t, priority: task.priority, due: task.due, desc: task.desc, logs: [...t.logs, log] } : t));
+      pushToast("업무가 수정되었습니다");
+    } catch (e) { console.error(e); pushToast("수정에 실패했습니다"); }
+  };
+
+  const handleDeleteTask = async (id) => {
+    try {
+      await deleteTask(id);
+      setTasks((ts) => ts.filter((t) => t.id !== id));
+      pushToast("업무가 삭제되었습니다");
+    } catch (e) { console.error(e); pushToast("삭제에 실패했습니다"); }
   };
 
   const handleUpdateStatus = async (id, status) => {
@@ -1246,14 +1369,14 @@ export default function CollabControlTower() {
 
       {isAdmin ? (
         adminTab === "monitor" ? (
-          <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} canRegister={false} canRequest={true} />
+          <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} accounts={accounts} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} onUpdateTask={handleUpdateTask} onDeleteTask={handleDeleteTask} canRegister={true} canRequest={true} />
         ) : adminTab === "accounts" ? (
           <AccountsManager accounts={accounts} setAccounts={setAccounts} pushToast={pushToast} />
         ) : (
           <LinkSender accounts={accounts} sentLinks={sentLinks} setSentLinks={setSentLinks} pushToast={pushToast} />
         )
       ) : (
-        <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} canRegister={true} canRequest={isHqStaff} />
+        <Dashboard viewer={viewer} tasks={tasks} notifications={visibleNotifications} accounts={accounts} onCreate={handleCreate} onUpdateStatus={handleUpdateStatus} onAddLog={handleAddLog} onRequestUpdate={handleRequestUpdate} onUploadAttachment={handleUploadAttachment} onUpdateTask={handleUpdateTask} onDeleteTask={handleDeleteTask} canRegister={true} canRequest={isHqStaff} />
       )}
 
       <Toast toasts={toasts} />
