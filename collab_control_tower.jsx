@@ -1347,7 +1347,7 @@ export default function CollabControlTower() {
       setTasks((ts) => ts.map((t) => t.id === taskId ? { ...t, logs: [...t.logs, log] } : t));
       pushToast("파일이 첨부되었습니다");
       return attachment;
-    } catch (e) { console.error(e); pushToast("파일 업로드에 실패했습니다"); throw e; }
+    } catch (e) { console.error(e); pushToast(e.message || "파일 업로드에 실패했습니다"); throw e; }
   };
 
   const NOTIF_ICON = { delayed: AlertTriangle, due: Clock, assign: Send, done: CheckCircle2, request: Megaphone, status: CheckCircle2, update: MessageSquare, feedback: MessageSquare };
